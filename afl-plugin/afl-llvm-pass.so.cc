@@ -2,13 +2,11 @@
    american fuzzy lop - LLVM-mode instrumentation pass
    ---------------------------------------------------
 
-   Written by Laszlo Szekeres <lszekeres@google.com>,
-              Michal Zalewski <lcamtuf@google.com>, and
-              Keegan McAllister <mcallister.keegan@gmail.com>
+   Written by Laszlo Szekeres <lszekeres@google.com> and
+              Michal Zalewski <lcamtuf@google.com>
 
    LLVM integration design comes from Laszlo Szekeres. C bits copied-and-pasted
-   from afl-as.c are Michal's fault. Keegan made some changes for Rust
-   integration.
+   from afl-as.c are Michal's fault.
 
    Copyright 2015, 2016 Google Inc. All rights reserved.
 
@@ -18,9 +16,14 @@
 
      http://www.apache.org/licenses/LICENSE-2.0
 
+   This library is plugged into LLVM when invoking clang through afl-clang-fast.
+   It tells the compiler to add code roughly equivalent to the bits discussed
+   in ../afl-as.h.
+
  */
 
-#include "config.h"
+#include "../config.h"
+#include "../debug.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -71,7 +74,7 @@ bool AFLCoverage::runOnModule(Module &M) {
 
   if (isatty(2) && !getenv("AFL_QUIET")) {
 
-    fprintf(stderr, "afl-llvm-pass by <lszekeres@google.com>\n");
+    SAYF(cCYA "afl-llvm-pass " cBRI VERSION cRST " by <lszekeres@google.com>\n");
 
   } else be_quiet = 1;
 
@@ -83,13 +86,12 @@ bool AFLCoverage::runOnModule(Module &M) {
   if (inst_ratio_str) {
 
     if (sscanf(inst_ratio_str, "%u", &inst_ratio) != 1 || !inst_ratio ||
-        inst_ratio > 100) {
-      fprintf(stderr, "Bad value of AFL_INST_RATIO (must be between 1 and 100)\n");
-      exit(1);
-    }
+        inst_ratio > 100)
+      FATAL("Bad value of AFL_INST_RATIO (must be between 1 and 100)");
+
   }
 
- /* Get globals for the SHM region and the previous location. Note that
+  /* Get globals for the SHM region and the previous location. Note that
      __afl_prev_loc is thread-local. */
 
   GlobalVariable *AFLMapPtr =
@@ -110,11 +112,11 @@ bool AFLCoverage::runOnModule(Module &M) {
       BasicBlock::iterator IP = BB.getFirstInsertionPt();
       IRBuilder<> IRB(&(*IP));
 
-      if ((random() % 100) >= inst_ratio) continue;
+      if (R(100) >= inst_ratio) continue;
 
       /* Make up cur_loc */
 
-      unsigned int cur_loc = random() % MAP_SIZE;
+      unsigned int cur_loc = R(MAP_SIZE);
 
       ConstantInt *CurLoc = ConstantInt::get(Int32Ty, cur_loc);
 
@@ -153,9 +155,8 @@ bool AFLCoverage::runOnModule(Module &M) {
 
   if (!be_quiet) {
 
-    if (!inst_blocks)
-        fprintf(stderr, "WARNING: No instrumentation targets found.\n");
-    else fprintf(stderr, "Instrumented %u locations (%s mode, ratio %u%%).\n",
+    if (!inst_blocks) WARNF("No instrumentation targets found.");
+    else OKF("Instrumented %u locations (%s mode, ratio %u%%).",
              inst_blocks,
              getenv("AFL_HARDEN") ? "hardened" : "non-hardened",
              inst_ratio);
@@ -166,5 +167,17 @@ bool AFLCoverage::runOnModule(Module &M) {
 
 }
 
-static RegisterPass<AFLCoverage> RegisterAFLPass("afl-coverage",
-    "American Fuzzy Lop Instrumentation");
+
+static void registerAFLPass(const PassManagerBuilder &,
+                            legacy::PassManagerBase &PM) {
+
+  PM.add(new AFLCoverage());
+
+}
+
+
+static RegisterStandardPasses RegisterAFLPass(
+    PassManagerBuilder::EP_OptimizerLast, registerAFLPass);
+
+static RegisterStandardPasses RegisterAFLPass0(
+    PassManagerBuilder::EP_EnabledOnOptLevel0, registerAFLPass);
